@@ -227,18 +227,19 @@ __0:
 	}
 	else
 	{
-		if (ERROR_ACCESS_DENIED == (hr = GetLastError()) && !SecondTry)
-		{
-			SecondTry = TRUE;
-
-			if (0 <= (hr = SetTokenForService(hSCManager, lpServiceName, hSystemToken, SERVICE_CHANGE_CONFIG)))
-			{
-				bRevert = TRUE;
-				goto __0;
-			}
-		}
+		hr = GetLastError();
 	}
 
+	if (ERROR_ACCESS_DENIED == hr && !SecondTry)
+	{
+		SecondTry = TRUE;
+
+		if (0 <= (hr = SetTokenForService(hSCManager, lpServiceName, hSystemToken, SERVICE_CHANGE_CONFIG)))
+		{
+			bRevert = TRUE;
+			goto __0;
+		}
+	}
 	if (bRevert) RtlRevertToSelf();
 	return HRESULT_FROM_WIN32(hr);
 }
@@ -256,15 +257,17 @@ __0:
 	}
 	else
 	{
-		if (ERROR_ACCESS_DENIED == (hr = GetLastError()) && !SecondTry)
-		{
-			SecondTry = TRUE;
+		hr = GetLastError();
+	}
 
-			if (0 <= (hr = SetTokenForService(hSCManager, lpServiceName, hSystemToken, SERVICE_START)))
-			{
-				bRevert = TRUE;
-				goto __0;
-			}
+	if (ERROR_ACCESS_DENIED == hr && !SecondTry)
+	{
+		SecondTry = TRUE;
+
+		if (0 <= (hr = SetTokenForService(hSCManager, lpServiceName, hSystemToken, SERVICE_START)))
+		{
+			bRevert = TRUE;
+			goto __0;
 		}
 	}
 
@@ -291,15 +294,17 @@ __0:
 	}
 	else
 	{
-		if (ERROR_ACCESS_DENIED == (hr = GetLastError()) && !SecondTry)
-		{
-			SecondTry = TRUE;
+		hr = GetLastError();
+	}
 
-			if (0 <= (hr = SetTokenForService(hSCManager, lpServiceName, hSystemToken, dwAccess)))
-			{
-				bRevert = TRUE;
-				goto __0;
-			}
+	if (ERROR_ACCESS_DENIED == hr && !SecondTry)
+	{
+		SecondTry = TRUE;
+
+		if (0 <= (hr = SetTokenForService(hSCManager, lpServiceName, hSystemToken, dwAccess)))
+		{
+			bRevert = TRUE;
+			goto __0;
 		}
 	}
 
