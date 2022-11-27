@@ -7,7 +7,11 @@ _NT_BEGIN
 extern volatile const UCHAR guz;
 
 struct SID6 : public SID {
-	DWORD SubAuthority[6];
+	DWORD SubAuthority[5];
+};
+
+struct SID2 : public SID {
+	DWORD SubAuthority[1];
 };
 
 const SID6 TrustedInstallerSid = {
@@ -20,6 +24,15 @@ const SID6 TrustedInstallerSid = {
 			SECURITY_TRUSTED_INSTALLER_RID3, 
 			SECURITY_TRUSTED_INSTALLER_RID4, 
 			SECURITY_TRUSTED_INSTALLER_RID5, 
+	}
+};
+
+const SID2 AdministratorsSid = {
+	{ 
+		SID_REVISION, 2, SECURITY_NT_AUTHORITY, { SECURITY_BUILTIN_DOMAIN_RID } 
+	},
+	{ 
+		DOMAIN_ALIAS_RID_ADMINS, 
 	}
 };
 
@@ -122,33 +135,123 @@ NTSTATUS SetTrustedToken(_In_ HANDLE hToken, _In_ PSID Sid)
 		s.ptg = CONTAINING_RECORD(Groups, TOKEN_GROUPS, Groups);
 		s.ptg->GroupCount = GroupCount;
 
-		Groups->Sid = Sid;
+		Groups->Sid = const_cast<SID*>(static_cast<const SID*>(&TrustedInstallerSid));
 		Groups->Attributes = SE_GROUP_ENABLED|SE_GROUP_ENABLED_BY_DEFAULT|SE_GROUP_OWNER;
 	}
 
-	const static TOKEN_USER tu = {{const_cast<SID*>(static_cast<const SID*>(&TrustedInstallerSid))}};
-	const static TOKEN_OWNER to = {const_cast<SID*>(static_cast<const SID*>(&TrustedInstallerSid))};
+	TOKEN_USER tu = {{ Sid }};
+	const static TOKEN_OWNER to = { const_cast<SID*>(static_cast<const SID*>(&TrustedInstallerSid)) };
 	const static LUID AuthenticationId = SYSTEM_LUID;
 	const static LARGE_INTEGER ExpirationTime = { MAXULONG, MAXLONG };
 	const static TOKEN_SOURCE ts = {{ '*', 'S', 'Y', 'S', 'T', 'E', 'M', '*' }};
 
-	if (0 <= (status = NtSetInformationThread(NtCurrentThread(), ThreadImpersonationToken, &hToken, sizeof(hToken))) &&
-		0 <= (status = NtCreateToken(&hToken, TOKEN_ALL_ACCESS, 
-		const_cast<POBJECT_ATTRIBUTES>(&oa_sqos), TokenImpersonation, 
-		const_cast<PLUID>(&AuthenticationId), const_cast<PLARGE_INTEGER>(&ExpirationTime), 
-		const_cast<PTOKEN_USER>(&tu), s.ptg, const_cast<PTOKEN_PRIVILEGES>(&tp), 
-		const_cast<PTOKEN_OWNER>(&to), (PTOKEN_PRIMARY_GROUP)&to, s.ptdd, const_cast<PTOKEN_SOURCE>(&ts))))
+	if (0 <= (status = NtSetInformationThread(NtCurrentThread(), ThreadImpersonationToken, &hToken, sizeof(hToken))))
 	{
-		status = NtSetInformationThread(NtCurrentThread(), ThreadImpersonationToken, &hToken, sizeof(hToken));
-		NtClose(hToken);
+		if (0 <= (status = NtCreateToken(&hToken, TOKEN_ALL_ACCESS, 
+			const_cast<POBJECT_ATTRIBUTES>(&oa_sqos), TokenImpersonation, 
+			const_cast<PLUID>(&AuthenticationId), const_cast<PLARGE_INTEGER>(&ExpirationTime), 
+			&tu, s.ptg, const_cast<PTOKEN_PRIVILEGES>(&tp), 
+			const_cast<PTOKEN_OWNER>(&to), (PTOKEN_PRIMARY_GROUP)&to, s.ptdd, const_cast<PTOKEN_SOURCE>(&ts))))
+		{
+			status = NtSetInformationThread(NtCurrentThread(), ThreadImpersonationToken, &hToken, sizeof(hToken));
+			NtClose(hToken);
+		}
+
+		if (0 > status)
+		{
+			RtlRevertToSelf();
+		}
 	}
 
 	return status;
 }
 
-NTSTATUS SetTrustedInstallerToken(_In_ HANDLE hSystemToken)
+HRESULT SetTokenForService(_In_ SC_HANDLE hService, _In_ HANDLE hSystemToken, _In_ ULONG Mask)
 {
-	return SetTrustedToken(hSystemToken, const_cast<SID*>(static_cast<const SID*>(&TrustedInstallerSid)));
+	ULONG dwError;
+
+	PVOID stack = alloca(guz);
+
+	union {
+		PVOID buf;
+		PSECURITY_DESCRIPTOR lpSecurityDescriptor;
+	};
+
+	ULONG cb = 0, rcb = 0x100;
+	do 
+	{
+		if (cb < rcb)
+		{
+			cb = RtlPointerToOffset(buf = alloca(rcb - cb), stack);
+		}
+
+		dwError = BOOL_TO_ERROR(QueryServiceObjectSecurity(hService, 
+			DACL_SECURITY_INFORMATION|OWNER_SECURITY_INFORMATION, 
+			lpSecurityDescriptor, cb, &rcb));
+
+	} while (dwError == ERROR_INSUFFICIENT_BUFFER);
+
+	if (dwError == NOERROR)
+	{
+		dwError = ERROR_NOT_FOUND;
+
+		BOOLEAN bpresent, bDefaulted;
+		union {
+			PACL Dacl;
+			PSID Owner;
+		};
+		NTSTATUS status;
+
+		if (0 <= RtlGetDaclSecurityDescriptor(lpSecurityDescriptor, &bpresent, &Dacl, &bDefaulted) && bpresent && Dacl)
+		{
+			if (USHORT AceCount = Dacl->AceCount)
+			{
+				union {
+					PACCESS_ALLOWED_ACE pAce;
+					PACE_HEADER pHead;
+					PVOID pv;
+					PBYTE pb;
+				};
+
+				pv = ++Dacl;
+
+				do
+				{
+					if (pHead->AceType == ACCESS_ALLOWED_ACE_TYPE)
+					{
+						if ((pAce->Mask & Mask) == Mask)
+						{
+							if (0 > (status = SetTrustedToken(hSystemToken, &pAce->SidStart)))
+							{
+								dwError = HRESULT_FROM_NT(status);
+							}
+							else
+							{
+								dwError = NOERROR;
+							}
+							break;
+						}
+					}
+
+				} while (pb += pHead->AceSize, --AceCount);
+			}
+		}
+
+		if (ERROR_NOT_FOUND == dwError && (Mask & WRITE_DAC) &&
+			(0 <= RtlGetOwnerSecurityDescriptor(lpSecurityDescriptor, &Owner, &bDefaulted)) && Owner)
+		{
+			if (0 > (status = SetTrustedToken(hSystemToken, Owner)))
+			{
+				dwError = HRESULT_FROM_NT(status);
+			}
+			else
+			{
+				dwError = NOERROR;
+			}
+		}
+	}
+
+	return HRESULT_FROM_WIN32(dwError);
 }
 
 HRESULT SetTokenForService(_In_ SC_HANDLE hSCManager, _In_ PCWSTR lpServiceName, _In_ HANDLE hSystemToken, _In_ ULONG Mask)
@@ -157,70 +260,7 @@ HRESULT SetTokenForService(_In_ SC_HANDLE hSCManager, _In_ PCWSTR lpServiceName,
 
 	if (SC_HANDLE hService = OpenServiceW(hSCManager, lpServiceName, READ_CONTROL))
 	{
-		PVOID stack = alloca(guz);
-
-		union {
-			PVOID buf;
-			PSECURITY_DESCRIPTOR lpSecurityDescriptor;
-		};
-
-		ULONG cb = 0, rcb = 0x100;
-		do 
-		{
-			if (cb < rcb)
-			{
-				cb = RtlPointerToOffset(buf = alloca(rcb - cb), stack);
-			}
-
-			dwError = BOOL_TO_ERROR(QueryServiceObjectSecurity(hService, 
-				DACL_SECURITY_INFORMATION|LABEL_SECURITY_INFORMATION|OWNER_SECURITY_INFORMATION, 
-				lpSecurityDescriptor, cb, &rcb));
-
-		} while (dwError == ERROR_INSUFFICIENT_BUFFER);
-
-		if (dwError == NOERROR)
-		{
-			dwError = ERROR_NOT_FOUND;
-
-			BOOLEAN bpresent, bDefaulted;
-			PACL Dacl;
-			NTSTATUS status = RtlGetDaclSecurityDescriptor(lpSecurityDescriptor, &bpresent, &Dacl, &bDefaulted);
-
-			if (0 <= status && bpresent && Dacl)
-			{
-				if (USHORT AceCount = Dacl->AceCount)
-				{
-					union {
-						PACCESS_ALLOWED_ACE pAce;
-						PACE_HEADER pHead;
-						PVOID pv;
-						PBYTE pb;
-					};
-
-					pv = ++Dacl;
-
-					do
-					{
-						if (pHead->AceType == ACCESS_ALLOWED_ACE_TYPE)
-						{
-							if ((pAce->Mask & Mask) == Mask)
-							{
-								if (0 > (status = SetTrustedToken(hSystemToken, &pAce->SidStart)))
-								{
-									dwError = HRESULT_FROM_NT(status);
-								}
-								else
-								{
-									dwError = NOERROR;
-								}
-								break;
-							}
-						}
-
-					} while (pb += pHead->AceSize, --AceCount);
-				}
-			}
-		}
+		dwError = SetTokenForService(hService, hSystemToken, Mask);
 
 		CloseServiceHandle(hService);
 	}

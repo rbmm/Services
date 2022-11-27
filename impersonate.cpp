@@ -16,7 +16,7 @@ BEGIN_PRIVILEGES(tp_Debug, 3)
 	LAA(SE_TAKE_OWNERSHIP_PRIVILEGE),
 END_PRIVILEGES
 
-NTSTATUS WINAPI RtlRevertToSelf()
+NTSTATUS RtlRevertToSelf()
 {
 	HANDLE hToken = 0;
 	return NtSetInformationThread(NtCurrentThread(), ThreadImpersonationToken, &hToken, sizeof(hToken));
@@ -80,7 +80,7 @@ NTSTATUS GetToken(_In_ PVOID buf, _In_ const TOKEN_PRIVILEGES* RequiredSet, _Out
 	return STATUS_UNSUCCESSFUL;
 }
 
-NTSTATUS WINAPI AdjustPrivileges()
+NTSTATUS AdjustPrivileges()
 {
 	NTSTATUS status;
 	HANDLE hToken;
@@ -95,7 +95,7 @@ NTSTATUS WINAPI AdjustPrivileges()
 	return status;
 }
 
-NTSTATUS WINAPI GetToken(_In_ const TOKEN_PRIVILEGES* RequiredSet, _Out_ PHANDLE phToken)
+NTSTATUS GetToken(_In_ const TOKEN_PRIVILEGES* RequiredSet, _Out_ PHANDLE phToken)
 {
 	NTSTATUS status;
 

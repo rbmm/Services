@@ -14,7 +14,6 @@ class CSecurityInformation : public ISecurityInformation
 	SC_HANDLE _hService;
 	PCWSTR _lpServiceName;
 	HANDLE _hSystemToken;
-	BOOL _bRevert;
 	LONG _dwRef = 1;
 
 	~CSecurityInformation()
@@ -23,35 +22,27 @@ class CSecurityInformation : public ISecurityInformation
 		{
 			CloseServiceHandle(hService);
 		}
-
-		if (_bRevert)
-		{
-			RtlRevertToSelf();
-		}
 	}
 
 public:
 
 	HRESULT Init(_In_ SC_HANDLE hSCManager, _In_ PCWSTR lpServiceName, _In_ HANDLE hSystemToken)
 	{
-		ULONG dwDesiredAccess = READ_CONTROL|WRITE_DAC|WRITE_OWNER;
-
-		if (0 <= SetTokenForService(hSCManager, lpServiceName, hSystemToken, READ_CONTROL|WRITE_DAC|WRITE_OWNER))
+		HRESULT hr = SetTokenForService(hSCManager, lpServiceName, hSystemToken, READ_CONTROL|WRITE_DAC|WRITE_OWNER);
+		if (0 <= hr)
 		{
-			_bRevert = TRUE;
-		}
-		else
-		{
-			dwDesiredAccess = READ_CONTROL|WRITE_OWNER;
-		}
-
-		if (SC_HANDLE hService = OpenServiceW(hSCManager, lpServiceName, dwDesiredAccess))
-		{
-			_hService = hService, _lpServiceName = lpServiceName, _hSystemToken = hSystemToken;
-			return S_OK;
+			if (SC_HANDLE hService = OpenServiceW(hSCManager, lpServiceName, READ_CONTROL|WRITE_DAC|WRITE_OWNER ))
+			{
+				hr = S_OK, _hService = hService, _lpServiceName = lpServiceName, _hSystemToken = hSystemToken;
+			}
+			else
+			{
+				hr = GetLastError();
+			}
+			RtlRevertToSelf();
 		}
 
-		return GetLastHr();
+		return HRESULT_FROM_WIN32(hr);
 	}
 
 	// *** IUnknown methods ***
@@ -98,7 +89,6 @@ public:
 		ULONG dwError, cb = 0x100;
 		do 
 		{
-
 			if (PSECURITY_DESCRIPTOR pSecurityDescriptor = LocalAlloc(0, cb))
 			{
 				if (NOERROR == (dwError = BOOL_TO_ERROR(QueryServiceObjectSecurity(_hService, 
@@ -123,7 +113,30 @@ public:
 
 	virtual HRESULT STDAPICALLTYPE SetSecurity (SECURITY_INFORMATION SecurityInformation, PSECURITY_DESCRIPTOR pSecurityDescriptor )
 	{
-		return GetLastHr(SetServiceObjectSecurity(_hService, SecurityInformation, pSecurityDescriptor));
+		if (SetServiceObjectSecurity(_hService, SecurityInformation, pSecurityDescriptor))
+		{
+			return S_OK;
+		}
+
+		HRESULT hr = GetLastError();
+
+		if (ERROR_ACCESS_DENIED == hr)
+		{
+			if (0 > (hr = SetTokenForService(_hService, _hSystemToken, WRITE_DAC|WRITE_OWNER)))
+			{
+				if (hr & FACILITY_NT_BIT)
+				{
+					hr = RtlNtStatusToDosError(hr & ~FACILITY_NT_BIT);
+				}
+			}
+			else
+			{
+				hr = GetLastHr(SetServiceObjectSecurity(_hService, SecurityInformation, pSecurityDescriptor));
+				RtlRevertToSelf();
+			}
+		}
+
+		return HRESULT_FROM_WIN32(hr);
 	}
 
 	virtual HRESULT STDAPICALLTYPE GetAccessRights ( const GUID* /*pguidObjectType*/,
