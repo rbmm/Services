@@ -1,0 +1,19 @@
+LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
+
+1 RT_MANIFEST ".manifest"
+
+ID_MAIN ICON "srv.ico"
+
+
+ID_B RCDATA "blue.png"
+ID_G RCDATA "green.png"
+ID_R RCDATA "red.png"
+ID_Y RCDATA "yellow.png"
+ID_K RCDATA "black.png"
+
+ID_START RCDATA "play.png"
+ID_PAUSE RCDATA "pause.png"
+ID_STOP RCDATA "stop.png"
+ID_SD RCDATA "security.png"
+ID_RELOAD RCDATA "Reload-icon.png"
+
