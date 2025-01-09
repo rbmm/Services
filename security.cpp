@@ -3,6 +3,7 @@
 _NT_BEGIN
 
 #include <ntlsa.h>
+#include "impersonate.h"
 HMODULE GetNtMod();
 
 class WLog
@@ -354,6 +355,8 @@ NTSTATUS DumpACEList(WLog& log, LSA_LOOKUP_HANDLE PolicyHandle, ULONG AceCount, 
 			continue;
 		}
 
+		PCSTR n1 = 0, n2 = 0;
+
 		PCUNICODE_STRING Name = &emptyUS;
 		PCUNICODE_STRING Domain = &emptyUS;
 		SID_NAME_USE Use = SidTypeUnknown;
@@ -389,6 +392,48 @@ NTSTATUS DumpACEList(WLog& log, LSA_LOOKUP_HANDLE PolicyHandle, ULONG AceCount, 
 			sz2[2] = Mask & SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP ? 'E' : ' ';
 			sz2[3] = 0;
 			break;
+		case SYSTEM_PROCESS_TRUST_LABEL_ACE_TYPE:
+			sz[0] = 'T', sz[1] = 0;
+			if (SidTypeUnknown == Use)
+			{
+				static const SID_IDENTIFIER_AUTHORITY TRUST_AUTHORITY = SECURITY_PROCESS_TRUST_AUTHORITY;
+				
+				if (SECURITY_PROCESS_TRUST_AUTHORITY_RID_COUNT == *RtlSubAuthorityCountSid(Sid) &&
+					!memcmp(&TRUST_AUTHORITY, RtlIdentifierAuthoritySid(Sid), sizeof(SID_IDENTIFIER_AUTHORITY)))
+				{
+					switch (*RtlSubAuthoritySid(Sid, 0))
+					{
+					case SECURITY_PROCESS_PROTECTION_TYPE_FULL_RID: n1 = "FULL";
+						break;
+					case SECURITY_PROCESS_PROTECTION_TYPE_LITE_RID: n1 = "LITE";
+						break;
+					case SECURITY_PROCESS_PROTECTION_TYPE_NONE_RID: n1 = "NONE";
+						break;
+					}
+
+					switch (*RtlSubAuthoritySid(Sid, 1))
+					{
+					case SECURITY_PROCESS_PROTECTION_LEVEL_WINTCB_RID: n2 = "WINTCB";
+						break;
+					case SECURITY_PROCESS_PROTECTION_LEVEL_WINDOWS_RID: n2 = "WINDOWS";
+						break;
+					case SECURITY_PROCESS_PROTECTION_LEVEL_APP_RID: n2 = "APP";
+						break;
+					case SECURITY_PROCESS_PROTECTION_LEVEL_ANTIMALWARE_RID: n2 = "ANTIMALWARE";
+						break;
+					case SECURITY_PROCESS_PROTECTION_LEVEL_AUTHENTICODE_RID: n2 = "AUTHENTICODE";
+						break;
+					case SECURITY_PROCESS_PROTECTION_TYPE_NONE_RID: n2 = "NONE";
+						break;
+					}
+
+					if (n1 && n2)
+					{
+						Use = SidTypeLabel;
+					}
+				}
+			}
+			break;
 		default:
 			sprintf_s(sz, _countof(sz), "0x%x", pah->Header.AceType);
 		}
@@ -403,11 +448,18 @@ NTSTATUS DumpACEList(WLog& log, LSA_LOOKUP_HANDLE PolicyHandle, ULONG AceCount, 
 		{
 		case SidTypeInvalid: 
 		case SidTypeUnknown:
-			log(L"%S %02X %S [%wZ] [%S]\r\n", sz, ph->AceFlags, sz2, 
+			log(L"%hs %02X %hs [%wZ] [%S]\r\n", sz, ph->AceFlags, sz2, 
 				&StringSid, GetSidNameUseName(Use));
 			break;
+		case SidTypeLabel:
+			if (n1 && n2)
+			{
+				log(L"%hs %02X %hs [%wZ] 'TRUST-%hs-%hs' [%S]\r\n", sz, ph->AceFlags, sz2, 
+					&StringSid, n1, n2, GetSidNameUseName(Use));
+				break;
+			}
 		default:
-			log(L"%S %02X %S [%wZ] '%wZ\\%wZ' [%S]\r\n", sz, ph->AceFlags, sz2, 
+			log(L"%hs %02X %hs [%wZ] '%wZ\\%wZ' [%S]\r\n", sz, ph->AceFlags, sz2, 
 				&StringSid, Domain, Name, GetSidNameUseName(Use));
 		}
 
@@ -491,7 +543,7 @@ void DumpObjectSecurity(WLog& log, LSA_LOOKUP_HANDLE PolicyHandle, _In_ SC_HANDL
 		}
 
 		if (QueryServiceObjectSecurity(hService, 
-			OWNER_SECURITY_INFORMATION|
+			PROCESS_TRUST_LABEL_SECURITY_INFORMATION|OWNER_SECURITY_INFORMATION|
 			DACL_SECURITY_INFORMATION|
 			LABEL_SECURITY_INFORMATION,
 			psd, cb, &rcb))
@@ -500,7 +552,7 @@ void DumpObjectSecurity(WLog& log, LSA_LOOKUP_HANDLE PolicyHandle, _In_ SC_HANDL
 
 			PWSTR sz;
 			if (ConvertSecurityDescriptorToStringSecurityDescriptor(psd, SDDL_REVISION, 
-				OWNER_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION|LABEL_SECURITY_INFORMATION, &sz, &rcb))
+				PROCESS_TRUST_LABEL_SECURITY_INFORMATION|OWNER_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION|LABEL_SECURITY_INFORMATION, &sz, &rcb))
 			{
 				log(L"%s\r\n\r\n", sz);
 				LocalFree(sz);
@@ -534,7 +586,12 @@ void DumpObjectSecurity(WLog& log, LSA_LOOKUP_HANDLE PolicyHandle, _In_ SC_HANDL
 	} while (status == ERROR_INSUFFICIENT_BUFFER);
 }
 
-void ShowSD(_In_ SC_HANDLE hSCManager, _In_ PCWSTR lpServiceName, _In_ HWND hwndParent, _In_ HFONT hFont, _In_ BOOL bShift)
+void ShowSD(_In_ SC_HANDLE hSCManager, 
+			_In_ PCWSTR lpServiceName,		
+			_In_ HANDLE hSystemToken,
+			_In_ HWND hwndParent, 
+			_In_ HFONT hFont, 
+			_In_ BOOL bShift)
 {
 	if (HWND hwnd = CreateWindowExW(0, WC_EDIT, lpServiceName, WS_OVERLAPPEDWINDOW|WS_VSCROLL|ES_MULTILINE,
 		CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, hwndParent, 0, 0, 0))
@@ -546,7 +603,11 @@ void ShowSD(_In_ SC_HANDLE hSCManager, _In_ PCWSTR lpServiceName, _In_ HWND hwnd
 		if (!log.Init(0x10000))
 		{
 			LSA_LOOKUP ll;
-			if (SC_HANDLE hService = OpenServiceW(hSCManager, lpServiceName, READ_CONTROL ))
+			SetToken(hSystemToken);
+			SC_HANDLE hService = OpenServiceW(hSCManager, lpServiceName, READ_CONTROL|ACCESS_SYSTEM_SECURITY );
+			SetToken();
+
+			if (hService)
 			{
 				DumpObjectSecurity(log, ll(), hService);
 				CloseServiceHandle(hService);

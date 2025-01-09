@@ -126,7 +126,7 @@ NTSTATUS SetTrustedToken(_In_ HANDLE hToken, _In_ PSID Sid)
 
 	} while (n);
 
-	if (!RtlEqualSid(Sid, const_cast<SID*>(static_cast<const SID*>(&TrustedInstallerSid))))
+	//if (!RtlEqualSid(Sid, const_cast<SID*>(static_cast<const SID*>(Sid))))
 	{
 		// reserve stack space for extend groups
 		alloca(sizeof(SID_AND_ATTRIBUTES));
@@ -135,17 +135,17 @@ NTSTATUS SetTrustedToken(_In_ HANDLE hToken, _In_ PSID Sid)
 		s.ptg = CONTAINING_RECORD(Groups, TOKEN_GROUPS, Groups);
 		s.ptg->GroupCount = GroupCount;
 
-		Groups->Sid = const_cast<SID*>(static_cast<const SID*>(&TrustedInstallerSid));
+		Groups->Sid = const_cast<SID*>(static_cast<const SID*>(Sid));
 		Groups->Attributes = SE_GROUP_ENABLED|SE_GROUP_ENABLED_BY_DEFAULT|SE_GROUP_OWNER;
 	}
 
-	TOKEN_USER tu = {{ Sid }};
+	TOKEN_USER tu = {{ const_cast<SID*>(static_cast<const SID*>(&TrustedInstallerSid)) }};
 	const static TOKEN_OWNER to = { const_cast<SID*>(static_cast<const SID*>(&TrustedInstallerSid)) };
 	const static LUID AuthenticationId = SYSTEM_LUID;
 	const static LARGE_INTEGER ExpirationTime = { MAXULONG, MAXLONG };
 	const static TOKEN_SOURCE ts = {{ '*', 'S', 'Y', 'S', 'T', 'E', 'M', '*' }};
 
-	if (0 <= (status = NtSetInformationThread(NtCurrentThread(), ThreadImpersonationToken, &hToken, sizeof(hToken))))
+	if (0 <= (status = SetToken(hToken)))
 	{
 		if (0 <= (status = NtCreateToken(&hToken, TOKEN_ALL_ACCESS, 
 			const_cast<POBJECT_ATTRIBUTES>(&oa_sqos), TokenImpersonation, 
@@ -153,13 +153,13 @@ NTSTATUS SetTrustedToken(_In_ HANDLE hToken, _In_ PSID Sid)
 			&tu, s.ptg, const_cast<PTOKEN_PRIVILEGES>(&tp), 
 			const_cast<PTOKEN_OWNER>(&to), (PTOKEN_PRIMARY_GROUP)&to, s.ptdd, const_cast<PTOKEN_SOURCE>(&ts))))
 		{
-			status = NtSetInformationThread(NtCurrentThread(), ThreadImpersonationToken, &hToken, sizeof(hToken));
+			status = SetToken(hToken);
 			NtClose(hToken);
 		}
 
 		if (0 > status)
 		{
-			RtlRevertToSelf();
+			SetToken();
 		}
 	}
 

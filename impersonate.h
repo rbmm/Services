@@ -4,7 +4,7 @@ NTSTATUS GetToken(_In_ const TOKEN_PRIVILEGES* RequiredSet, _Out_ PHANDLE phToke
 
 NTSTATUS AdjustPrivileges();
 
-NTSTATUS RtlRevertToSelf();
+NTSTATUS SetToken(HANDLE hToken = 0);
 
 HRESULT SetTokenForService(_In_ SC_HANDLE hService, _In_ HANDLE hSystemToken, _In_ ULONG Mask);
 

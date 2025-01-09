@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "../NtVer/nt_ver.h"
 
 #include "resource.h"
 _NT_BEGIN
@@ -11,8 +12,9 @@ _NT_BEGIN
 
 extern const volatile UCHAR guz = 0;
 
-BEGIN_PRIVILEGES(tp_ctp, 2)
+BEGIN_PRIVILEGES(tp_ctp, 3)
 	LAA(SE_CREATE_TOKEN_PRIVILEGE),
+	LAA(SE_SECURITY_PRIVILEGE),
 	LAA(SE_IMPERSONATE_PRIVILEGE),
 END_PRIVILEGES
 
@@ -81,7 +83,7 @@ __nt:
 }
 
 void EditServiceSecurity(_In_ HWND hwnd ,_In_ SC_HANDLE hSCManager, _In_ PCWSTR lpServiceName, _In_ HANDLE hSystemToken);
-void ShowSD(_In_ SC_HANDLE hSCManager, _In_ PCWSTR lpServiceName, _In_ HWND hwndParent, _In_ HFONT hFont, _In_ BOOL bShift);
+void ShowSD(_In_ SC_HANDLE hSCManager, _In_ PCWSTR lpServiceName, _In_ HANDLE hSystemToken, _In_ HWND hwndParent, _In_ HFONT hFont, _In_ BOOL bShift);
 HRESULT ChangeServiceStartType(_In_ ULONG dwStartType, _In_ SC_HANDLE hSCManager, _In_ PCWSTR lpServiceName, _In_ HANDLE hSystemToken);
 HRESULT TryStartService(_In_ SC_HANDLE hSCManager, _In_ PCWSTR lpServiceName, _In_ HANDLE hSystemToken);
 HRESULT TryControlService(_In_ SC_HANDLE hSCManager, 
@@ -250,6 +252,10 @@ class ZMainWnd : public ZSDIFrameWnd, ServiceData
 	ULONG _dwStartType = MAXULONG;
 	BOOL _bTimerActive;
 
+	//////////////////////////////////////////////////////////////////////////
+	//ULONG _iTop = MINLONG, _iCount = 0;
+	//////////////////////////////////////////////////////////////////////////
+
 	enum { nTimerID = 1 };
 
 	virtual PCUNICODE_STRING getPosName()
@@ -393,7 +399,7 @@ ZMainWnd::~ZMainWnd()
 	}
 }
 
-//#define _TEST_
+#define _TEST_
 #ifdef _TEST_
 
 EXTERN_C PVOID __imp_RtlGetPersistedStateLocation = 0;
@@ -460,6 +466,9 @@ void QuerySD(LPWSTR lpServiceName, PSECURITY_DESCRIPTOR lpSecurityDescriptor)
 }
 #endif//_TEST_
 
+#undef _NTDDK_
+#include <sddl.h>
+
 void InitS(HANDLE hKey, PUNICODE_STRING Id, ULONG n, ENUM_SERVICE_STATUS_PROCESSW Services[])
 {
 	UNICODE_STRING ObjectName;
@@ -518,7 +527,14 @@ void InitS(HANDLE hKey, PUNICODE_STRING Id, ULONG n, ENUM_SERVICE_STATUS_PROCESS
 					{
 						if (RtlValidSecurityDescriptor(kvpi.Data))
 						{
-							QuerySD(Services->lpServiceName, kvpi.Data);
+							PWSTR psz;
+							if (ConvertSecurityDescriptorToStringSecurityDescriptorW(kvpi.Data, 
+								SDDL_REVISION, DACL_SECURITY_INFORMATION, &psz, 0))
+							{
+								DbgPrint("%S: %S\n", Services->lpServiceName, psz);
+								LocalFree(psz);
+							}
+							//QuerySD(Services->lpServiceName, kvpi.Data);
 						}
 					}
 					NtClose(hKey);
@@ -577,10 +593,13 @@ HRESULT ZMainWnd::Init(SC_HANDLE hSCManager)
 	{
 		dwError = ERROR_OUTOFMEMORY;
 
+		DWORD dwServiceType = g_nt_ver.Version < _WIN32_WINNT_WIN10 ? 
+			SERVICE_WIN32|SERVICE_ADAPTER |SERVICE_DRIVER|SERVICE_INTERACTIVE_PROCESS: SERVICE_TYPE_ALL;
+
 		if (ENUM_SERVICES* next = new(cbBytesNeeded) ENUM_SERVICES)
 		{
 			switch (dwError = BOOL_TO_ERROR(EnumServicesStatusEx(hSCManager, 
-				SC_ENUM_PROCESS_INFO, SERVICE_TYPE_ALL, SERVICE_STATE_ALL, 
+				SC_ENUM_PROCESS_INFO, dwServiceType, SERVICE_STATE_ALL, 
 				(PBYTE)next->Services, cbBytesNeeded, &cbBytesNeeded, &n, &ResumeHandle, 0)))
 			{
 			case NOERROR:
@@ -837,7 +856,7 @@ void ZMainWnd::OnSD(HWND hwnd)
 	{
 		0 > GetKeyState(VK_LSHIFT) ? 
 			EditServiceSecurity(hwnd, _hSCManager, lpService->lpServiceName, _hSysToken) :
-			ShowSD(_hSCManager, lpService->lpServiceName, hwnd, _hFont, 0 > GetKeyState(VK_RSHIFT));
+			ShowSD(_hSCManager, lpService->lpServiceName, _hSysToken, hwnd, _hFont, 0 > GetKeyState(VK_RSHIFT));
 	}
 }
 
@@ -892,10 +911,10 @@ void ZMainWnd::OnRClk(HWND hwnd, NMITEMACTIVATE* lpnmitem )
 				EditServiceSecurity(hwnd, _hSCManager, lpService->lpServiceName, _hSysToken);
 				break;
 			case ID_0_VIEWSECURITY:
-				ShowSD(_hSCManager, lpService->lpServiceName, hwnd, _hFont, FALSE);
+				ShowSD(_hSCManager, lpService->lpServiceName, _hSysToken, hwnd, _hFont, FALSE);
 				break;
 			case ID_0_VIEWSECURITY40004:
-				ShowSD(_hSCManager, lpService->lpServiceName, hwnd, _hFont, TRUE);
+				ShowSD(_hSCManager, lpService->lpServiceName, _hSysToken, hwnd, _hFont, TRUE);
 				break;
 			case ID_0_COPYNAME:
 				SetStringToClipboard(hwnd, lpService->lpDisplayName);
@@ -987,6 +1006,41 @@ LRESULT ZMainWnd::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 			case LVN_ITEMCHANGED:
 				OnItemChanged(hwnd, reinterpret_cast<NMLISTVIEW*>(lParam));
 				break;
+
+			//case LVN_ODCACHEHINT:
+			//	reinterpret_cast<NMLVCACHEHINT*>(lParam)->iTo -= reinterpret_cast<NMLVCACHEHINT*>(lParam)->iFrom - 1;
+			//	if (_iCount < (ULONG)reinterpret_cast<NMLVCACHEHINT*>(lParam)->iTo)
+			//	{
+			//		_iCount = reinterpret_cast<NMLVCACHEHINT*>(lParam)->iTo;
+			//	}
+
+			//	if ((ULONG)(reinterpret_cast<NMLVCACHEHINT*>(lParam)->iFrom - _iTop) >= _iCount)
+			//	{
+			//		_iTop = reinterpret_cast<NMLVCACHEHINT*>(lParam)->iFrom;
+
+			//		DbgPrint("====%u, %u\n", 
+			//			reinterpret_cast<NMLVCACHEHINT*>(lParam)->iFrom,reinterpret_cast<NMLVCACHEHINT*>(lParam)->iTo);
+			//	}
+			//	break;
+
+			//case NM_CUSTOMDRAW:
+			//	DbgPrint("************\n");
+			//	break;
+
+			//default:
+			//	ULONG i = LVN_FIRST - ((NMHDR*)lParam)->code;
+			//	if (i < (LVN_FIRST - LVN_LAST))
+			//	{
+			//		switch (i)
+			//		{
+			//		case LVN_FIRST - LVN_HOTTRACK:
+			//			__nop();
+			//			break;
+			//		default:
+			//			DbgPrint(":: %u\n", i);
+			//		}
+			//	}
+			//	break;
 			}
 			break;
 		}

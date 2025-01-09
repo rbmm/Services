@@ -16,9 +16,8 @@ BEGIN_PRIVILEGES(tp_Debug, 3)
 	LAA(SE_TAKE_OWNERSHIP_PRIVILEGE),
 END_PRIVILEGES
 
-NTSTATUS RtlRevertToSelf()
+NTSTATUS SetToken(HANDLE hToken)
 {
-	HANDLE hToken = 0;
 	return NtSetInformationThread(NtCurrentThread(), ThreadImpersonationToken, &hToken, sizeof(hToken));
 }
 

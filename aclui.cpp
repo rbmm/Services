@@ -39,7 +39,7 @@ public:
 			{
 				hr = GetLastError();
 			}
-			RtlRevertToSelf();
+			SetToken();
 		}
 
 		return HRESULT_FROM_WIN32(hr);
@@ -132,7 +132,7 @@ public:
 			else
 			{
 				hr = GetLastHr(SetServiceObjectSecurity(_hService, SecurityInformation, pSecurityDescriptor));
-				RtlRevertToSelf();
+				SetToken();
 			}
 		}
 
@@ -253,7 +253,7 @@ __0:
 			goto __0;
 		}
 	}
-	if (bRevert) RtlRevertToSelf();
+	if (bRevert) SetToken();
 	return HRESULT_FROM_WIN32(hr);
 }
 
@@ -284,7 +284,7 @@ __0:
 		}
 	}
 
-	if (bRevert) RtlRevertToSelf();
+	if (bRevert) SetToken();
 	return HRESULT_FROM_WIN32(hr);
 }
 
@@ -321,7 +321,7 @@ __0:
 		}
 	}
 
-	if (bRevert) RtlRevertToSelf();
+	if (bRevert) SetToken();
 	return HRESULT_FROM_WIN32(hr);
 }
 
